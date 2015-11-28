@@ -1,130 +1,100 @@
+#define BLYNK_PRINT Serial    // Comment this out to disable prints and save space
+
 #include <ESP8266WiFi.h>
-
-typedef struct {
-    int id;
-    int ml;
-} pumpRequest;
-
-pumpRequest parsedRequest;
-
-const char WiFiAPPSK[] = "pump it up";
-const String URLPrefix = "GET /pump/";
+#include <BlynkSimpleEsp8266.h>
+#include <SimpleTimer.h>
 
 #define PUMP_ML_PER_MINUTE 60
 
-WiFiServer server(80);
+#define BLYNK_TOKEN  "da620847b9b74d53802b9abef1390732"
+#define BLYNK_PORT 8442
+
+#define WIFI_SSID "evilnet"
+#define WIFI_PASS "evil@me4ever"
+
+
+SimpleTimer timer;
+
+int pumps[] = {0, 0};
+
+// 0 -> 4
+// 1 -> 5
+int pumpsMap[] = {4, 5};
+
+bool shouldRunPumps = false;
+int timeOfEvent = 0;
+
+IPAddress ip(192,168,1,101);  //Node static IP
+IPAddress gateway(192,168,1,1);
+IPAddress subnet(255,255,255,0);
+IPAddress dns(8,8,8,8);
 
 void setupWiFi() {
-    WiFi.mode(WIFI_AP);
-
-    // Do a little work to get a unique-ish name. Append the
-    // last two bytes of the MAC (HEX'd) to "Thing-":
-    uint8_t mac[WL_MAC_ADDR_LENGTH];
-    WiFi.softAPmacAddress(mac);
-    String macID = String(mac[WL_MAC_ADDR_LENGTH - 2], HEX) +
-                 String(mac[WL_MAC_ADDR_LENGTH - 1], HEX);
-    macID.toUpperCase();
-    String AP_NameString = "HOTBOX__" + macID;
-
-    char AP_NameChar[AP_NameString.length() + 1];
-    memset(AP_NameChar, 0, AP_NameString.length() + 1);
-
-    for (int i=0; i<AP_NameString.length(); i++)
-        AP_NameChar[i] = AP_NameString.charAt(i);
-
-    WiFi.softAP(AP_NameChar, WiFiAPPSK);
-    Serial.println("ready.");
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.config(ip, gateway, subnet, dns);
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+ 
+  Serial.println("");
+  Serial.println("WiFi connected");  
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
 }
 
-void setupHardware() {
+void setup() {
     Serial.begin(115200);    // Initialize serial communications
+    setupWiFi();
 
     pinMode(4, OUTPUT);
     pinMode(5, OUTPUT);
 
     digitalWrite(4, HIGH);
     digitalWrite(5, HIGH);
+
+    Blynk.config(BLYNK_TOKEN);
+    timer.setInterval(250, sendStatus);
+
 }
 
-void setup() {
-    setupHardware();
-    setupWiFi();
-    server.begin();
+void sendStatus() {
+    Blynk.virtualWrite(V3, pumps[0]);
+    Blynk.virtualWrite(V5, pumps[1]);
+}
+BLYNK_WRITE(V0)
+{
+    pumps[0] = param.asInt();
+    Blynk.virtualWrite(V3, pumps[0]);
 }
 
-
-void resetRequest() {
-    parsedRequest.id = 0;
-    parsedRequest.ml = 0;
+BLYNK_WRITE(V1)
+{
+    pumps[1] = param.asInt();
+    Blynk.virtualWrite(V5, pumps[1]);
 }
 
-void parseRequest(String req) {
-    Serial.println(req);
-
-    resetRequest();
-
-    if (req.indexOf(URLPrefix) == -1)
-        return;
-
-    if (req.length() == URLPrefix.length())
-        return;
-    
-    req = req.substring(URLPrefix.length());
-    req = req.substring(0, req.indexOf(' '));
-
-    int slashIndex = req.indexOf('/');
-
-    if (slashIndex == -1)
-        return;
-
-    parsedRequest.id = req.substring(0, slashIndex).toInt();
-    parsedRequest.ml = req.substring(slashIndex+1).toInt();
+BLYNK_WRITE(V2)
+{
+    shouldRunPumps = true;
+    timeOfEvent = millis();
 }
 
-
-
-void sendResponseToClient(WiFiClient client, String response) {
-    client.flush();
-
-    String s = "HTTP/1.1 200 OK\r\n";
-    s += "Content-Type: text/html\r\n\r\n";
-    s += "<!DOCTYPE HTML>\r\n<html>\r\n";
-    s += response;
-
-    client.print(s);
-    client.flush();
-    delay(1);
-}
-
-void runPump(int id, int ml) {
-    digitalWrite(id, LOW);
-    delay(PUMP_ML_PER_MINUTE / 60 * ml * 1000);
-    digitalWrite(id, HIGH);
+void runPumps() {
+    for (int i = 0; i < 2; i++) {
+        digitalWrite(pumpsMap[i], LOW);
+        delay(PUMP_ML_PER_MINUTE / 60 * pumps[i] * 1000);
+        digitalWrite(pumpsMap[i], HIGH);
+    }
 }
 
 void loop() {
-    WiFiClient client = server.available();
+    Blynk.run();
+    timer.run();
 
-    if (!client) {
-        return;
-    }
-
-
-    String req = client.readStringUntil('\r');
-    parseRequest(req);
-
-    client.flush();
-
-    // Prepare the response. Start with the common header:
-    // If we're setting the LED, print out a message saying we did
-    if (parsedRequest.id != 0 && parsedRequest.ml != 0) {
-        sendResponseToClient(client, "running.<br>");
-        Serial.println(parsedRequest.id);
-        Serial.println(parsedRequest.ml);
-        runPump(parsedRequest.id, parsedRequest.ml);
-        client.print("done.<br></html>");
-        client.flush();
-    } else {
-        sendResponseToClient(client, "Invalid Request.<br></html>");
+    if (millis() - timeOfEvent > 500 && shouldRunPumps) {
+        runPumps();
+        shouldRunPumps = false;
     }
 }
