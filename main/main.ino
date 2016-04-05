@@ -1,100 +1,64 @@
-#define BLYNK_PRINT Serial    // Comment this out to disable prints and save space
-
 #include <ESP8266WiFi.h>
-#include <BlynkSimpleEsp8266.h>
-#include <SimpleTimer.h>
+#include <ESP8266WebServer.h>
 
-#define PUMP_ML_PER_MINUTE 60
+/* Set these to your desired credentials. */
+const char *ssid = "pumpie";
+const char *password = "whereeveryougothereyouare";
 
-#define BLYNK_TOKEN  "da620847b9b74d53802b9abef1390732"
-#define BLYNK_PORT 8442
+ESP8266WebServer server(80);
 
-#define WIFI_SSID "evilnet"
-#define WIFI_PASS "evil@me4ever"
-
-
-SimpleTimer timer;
-
-int pumps[] = {0, 0};
-
-// 0 -> 4
-// 1 -> 5
-int pumpsMap[] = {4, 5};
-
-bool shouldRunPumps = false;
-int timeOfEvent = 0;
-
-IPAddress ip(192,168,1,101);  //Node static IP
-IPAddress gateway(192,168,1,1);
-IPAddress subnet(255,255,255,0);
-IPAddress dns(8,8,8,8);
-
-void setupWiFi() {
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  WiFi.config(ip, gateway, subnet, dns);
-  
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
- 
-  Serial.println("");
-  Serial.println("WiFi connected");  
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-}
+int pumpsMap[] = {2, 14, 12, 13, 15};
 
 void setup() {
-    Serial.begin(115200);    // Initialize serial communications
-    setupWiFi();
-
-    pinMode(4, OUTPUT);
-    pinMode(5, OUTPUT);
-
-    digitalWrite(4, HIGH);
-    digitalWrite(5, HIGH);
-
-    Blynk.config(BLYNK_TOKEN);
-    timer.setInterval(250, sendStatus);
-
-}
-
-void sendStatus() {
-    Blynk.virtualWrite(V3, pumps[0]);
-    Blynk.virtualWrite(V5, pumps[1]);
-}
-BLYNK_WRITE(V0)
-{
-    pumps[0] = param.asInt();
-    Blynk.virtualWrite(V3, pumps[0]);
-}
-
-BLYNK_WRITE(V1)
-{
-    pumps[1] = param.asInt();
-    Blynk.virtualWrite(V5, pumps[1]);
-}
-
-BLYNK_WRITE(V2)
-{
-    shouldRunPumps = true;
-    timeOfEvent = millis();
-}
-
-void runPumps() {
-    for (int i = 0; i < 2; i++) {
-        digitalWrite(pumpsMap[i], LOW);
-        delay(PUMP_ML_PER_MINUTE / 60 * pumps[i] * 1000);
-        digitalWrite(pumpsMap[i], HIGH);
+    for (int i = 0; i < 5; i++) {
+        pinMode(pumpsMap[i], OUTPUT);
+        //digitalWrite(pumpsMap[i], LOW);
     }
+
+    Serial.begin(115200);    // Initialize serial communications
+
+    WiFi.softAP(ssid, password);
+
+    IPAddress myIP = WiFi.softAPIP();
+    Serial.print("AP IP address: ");
+    Serial.println(myIP);
+    server.on("/", handleRoot);
+    server.begin();
+}
+
+void handleRoot() {
+    int pumpId, duration;
+    int found = 0;
+
+    for (uint8_t i=0; i<server.args(); i++){
+          if (server.argName(i) == "pump") {
+              pumpId = server.arg(i).toInt();
+              found++;
+          }
+          
+          if (server.argName(i) == "duration") {
+              duration = server.arg(i).toInt();
+              found++;
+          }
+    }
+
+    if (found == 2) {
+        runPump(pumpId, duration);
+        server.send(200, "text/html", "OK\n");
+    } else {
+        server.send(500, "text/html", "ERROR\n");
+    }
+
+}
+
+void runPump(int pumpId, int duration) {
+    int pin = pumpsMap[pumpId];
+
+    digitalWrite(pin, HIGH);
+    delay(duration);
+    digitalWrite(pin, LOW);
 }
 
 void loop() {
-    Blynk.run();
-    timer.run();
-
-    if (millis() - timeOfEvent > 500 && shouldRunPumps) {
-        runPumps();
-        shouldRunPumps = false;
-    }
+    server.handleClient();
 }
